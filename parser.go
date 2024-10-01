@@ -20,6 +20,7 @@
 package whoisparser
 
 import (
+	"errors"
 	"regexp"
 	"strings"
 
@@ -30,7 +31,7 @@ import (
 
 // Version returns package version
 func Version() string {
-	return "1.24.20"
+	return "1.25.0"
 }
 
 // Author returns package author
@@ -43,8 +44,19 @@ func License() string {
 	return "Licensed under the Apache License 2.0"
 }
 
-// Parse returns parsed whois info
-func Parse(text string) (whoisInfo WhoisInfo, err error) { //nolint:cyclop
+// Parse returns parsed whois info for domain, IP, or AS
+func Parse(text string) (whoisInfo WhoisInfo, err error) {
+	if isASWhois(text) {
+		return ParseASWhois(text)
+	} else if isIPWhois(text) {
+		return ParseIPWhois(text)
+	} else {
+		return ParseDomainWhois(text)
+	}
+}
+
+// parseDomainWhois parses domain whois information
+func ParseDomainWhois(text string) (whoisInfo WhoisInfo, err error) { //nolint:cyclop
 	name, extension := searchDomain(text)
 	if name == "" {
 		err = getDomainErrorType(text)
@@ -203,6 +215,553 @@ func Parse(text string) (whoisInfo WhoisInfo, err error) { //nolint:cyclop
 	}
 
 	return
+}
+
+// ParseIPWhois parses IP WHOIS information.
+func ParseIPWhois(text string) (whoisInfo WhoisInfo, err error) {
+	ipInfo := &IPInfo{
+		Networks: []*Network{},
+	}
+
+	whoisLines := strings.Split(text, "\n")
+	var currentNetwork *Network
+	currentSection := ""
+
+	// Flags to check mandatory fields
+	hasNetRange := false
+	hasCIDR := false
+
+	for _, line := range whoisLines {
+		line = strings.TrimSpace(line)
+		// Skip empty lines and comments
+		if len(line) < 5 || strings.HasPrefix(line, "#") || !strings.Contains(line, ":") {
+			continue
+		}
+
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+
+		switch strings.ToLower(key) {
+		// Network-level fields
+		case "netrange":
+			// Start a new Network section
+			currentNetwork = &Network{}
+			currentNetwork.Range = value
+			ipInfo.Networks = append(ipInfo.Networks, currentNetwork)
+			hasNetRange = true
+			currentSection = "network"
+		case "cidr":
+			if currentNetwork != nil {
+				cidrs := strings.Split(value, ",")
+				for _, cidr := range cidrs {
+					cidr = strings.TrimSpace(cidr)
+					if cidr != "" {
+						currentNetwork.CIDR = append(currentNetwork.CIDR, cidr)
+						hasCIDR = true
+					}
+				}
+			}
+			currentSection = "network"
+		case "netname":
+			if currentNetwork != nil {
+				currentNetwork.Name = value
+			}
+			currentSection = "network"
+		case "nethandle":
+			if currentNetwork != nil {
+				currentNetwork.Handle = value
+			}
+			currentSection = "network"
+		case "parent":
+			if currentNetwork != nil {
+				currentNetwork.Parent = value
+			}
+			currentSection = "network"
+		case "nettype":
+			if currentNetwork != nil {
+				currentNetwork.Type = value
+			}
+			currentSection = "network"
+		case "originas":
+			if currentNetwork != nil {
+				currentNetwork.OriginAS = value
+			}
+			currentSection = "network"
+		case "organization":
+			if currentNetwork != nil {
+				currentNetwork.OrganizationName = value
+				// Do not set currentSection here
+			}
+		// Organization section starts here
+		case "orgname":
+			if currentNetwork != nil {
+				if currentNetwork.Organization == nil {
+					currentNetwork.Organization = &Contact{}
+				}
+				currentNetwork.Organization.Organization = value
+				currentSection = "organization"
+			}
+		case "orgid":
+			if currentNetwork != nil {
+				if currentNetwork.Organization == nil {
+					currentNetwork.Organization = &Contact{}
+				}
+				currentNetwork.Organization.ID = value
+				currentSection = "organization"
+			}
+		// Customer section
+		case "custname":
+			if currentNetwork != nil {
+				if currentNetwork.Customer == nil {
+					currentNetwork.Customer = &Contact{}
+				}
+				currentNetwork.Customer.Name = value
+				currentSection = "customer"
+			}
+		// Assign RegDate and Updated based on current section
+		case "regdate":
+			if currentNetwork != nil {
+				switch currentSection {
+				case "organization":
+					if currentNetwork.Organization != nil {
+						currentNetwork.Organization.RegistrationDate = value
+					}
+				case "customer":
+					if currentNetwork.Customer != nil {
+						currentNetwork.Customer.RegistrationDate = value
+					}
+				default:
+					currentNetwork.RegDate = value
+				}
+			}
+		case "updated":
+			if currentNetwork != nil {
+				switch currentSection {
+				case "organization":
+					if currentNetwork.Organization != nil {
+						currentNetwork.Organization.Updated = value
+					}
+				case "customer":
+					if currentNetwork.Customer != nil {
+						currentNetwork.Customer.Updated = value
+					}
+				default:
+					currentNetwork.Updated = value
+				}
+			}
+		case "ref":
+			if currentNetwork != nil {
+				switch currentSection {
+				case "organization":
+					if currentNetwork.Organization != nil {
+						currentNetwork.Organization.ReferralURL = value
+					}
+					currentSection = "network" // Reset after organization
+				case "customer":
+					if currentNetwork.Customer != nil {
+						currentNetwork.Customer.ReferralURL = value
+					}
+					currentSection = "network" // Reset after customer
+				default:
+					currentNetwork.Ref = value
+				}
+			}
+		// Address and contact information
+		case "address":
+			if currentNetwork != nil {
+				switch currentSection {
+				case "organization":
+					if currentNetwork.Organization != nil {
+						currentNetwork.Organization.Street += value + "\n"
+					}
+				case "customer":
+					if currentNetwork.Customer != nil {
+						currentNetwork.Customer.Street += value + "\n"
+					}
+				}
+			}
+		case "city":
+			if currentNetwork != nil {
+				switch currentSection {
+				case "organization":
+					if currentNetwork.Organization != nil {
+						currentNetwork.Organization.City = value
+					}
+				case "customer":
+					if currentNetwork.Customer != nil {
+						currentNetwork.Customer.City = value
+					}
+				}
+			}
+		case "stateprov", "state":
+			if currentNetwork != nil {
+				switch currentSection {
+				case "organization":
+					if currentNetwork.Organization != nil {
+						currentNetwork.Organization.Province = value
+					}
+				case "customer":
+					if currentNetwork.Customer != nil {
+						currentNetwork.Customer.Province = value
+					}
+				}
+			}
+		case "postalcode", "postal-code":
+			if currentNetwork != nil {
+				switch currentSection {
+				case "organization":
+					if currentNetwork.Organization != nil {
+						currentNetwork.Organization.PostalCode = value
+					}
+				case "customer":
+					if currentNetwork.Customer != nil {
+						currentNetwork.Customer.PostalCode = value
+					}
+				}
+			}
+		case "country":
+			if currentNetwork != nil {
+				switch currentSection {
+				case "organization":
+					if currentNetwork.Organization != nil {
+						currentNetwork.Organization.Country = value
+					}
+				case "customer":
+					if currentNetwork.Customer != nil {
+						currentNetwork.Customer.Country = value
+					}
+				}
+			}
+		case "comment":
+			if currentNetwork != nil {
+				switch currentSection {
+				case "organization":
+					if currentNetwork.Organization != nil {
+						currentNetwork.Organization.Comment += value + "\n"
+					}
+				case "customer":
+					if currentNetwork.Customer != nil {
+						currentNetwork.Customer.Comment += value + "\n"
+					}
+				default:
+					currentNetwork.Comment += value + "\n"
+				}
+			}
+		// Top-level contacts (Abuse, Technical, Routing)
+		case "orgabusehandle", "org-abuse-handle":
+			// Initialize Abuse contact
+			ipInfo.Abuse = &Contact{
+				ID: value,
+			}
+			currentSection = "abuse"
+		case "orgabusename", "org-abuse-name":
+			if currentSection == "abuse" && ipInfo.Abuse != nil {
+				ipInfo.Abuse.Name = value
+			}
+		case "orgabusephone", "org-abuse-phone":
+			if currentSection == "abuse" && ipInfo.Abuse != nil {
+				ipInfo.Abuse.Phone = value
+			}
+		case "orgabuseemail", "org-abuse-email":
+			if currentSection == "abuse" && ipInfo.Abuse != nil {
+				ipInfo.Abuse.Email = value
+			}
+		case "orgabuseref", "org-abuse-ref":
+			if currentSection == "abuse" && ipInfo.Abuse != nil {
+				ipInfo.Abuse.ReferralURL = value
+			}
+			currentSection = "" // Reset after abuse contact
+		case "orgtechhandle", "org-tech-handle":
+			// Initialize Technical contact
+			ipInfo.Technical = &Contact{
+				ID: value,
+			}
+			currentSection = "technical"
+		case "orgtechname", "org-tech-name":
+			if currentSection == "technical" && ipInfo.Technical != nil {
+				ipInfo.Technical.Name = value
+			}
+		case "orgtechphone", "org-tech-phone":
+			if currentSection == "technical" && ipInfo.Technical != nil {
+				ipInfo.Technical.Phone = value
+			}
+		case "orgtechemail", "org-tech-email":
+			if currentSection == "technical" && ipInfo.Technical != nil {
+				ipInfo.Technical.Email = value
+			}
+		case "orgtechref", "org-tech-ref":
+			if currentSection == "technical" && ipInfo.Technical != nil {
+				ipInfo.Technical.ReferralURL = value
+			}
+			currentSection = "" // Reset after technical contact
+		case "orgroutinghandle", "org-routing-handle":
+			// Initialize Routing contact
+			ipInfo.Routing = &Contact{
+				ID: value,
+			}
+			currentSection = "routing"
+		case "orgroutingname", "org-routing-name":
+			if currentSection == "routing" && ipInfo.Routing != nil {
+				ipInfo.Routing.Name = value
+			}
+		case "orgroutingphone", "org-routing-phone":
+			if currentSection == "routing" && ipInfo.Routing != nil {
+				ipInfo.Routing.Phone = value
+			}
+		case "orgroutingemail", "org-routing-email":
+			if currentSection == "routing" && ipInfo.Routing != nil {
+				ipInfo.Routing.Email = value
+			}
+		case "orgroutingref", "org-routing-ref":
+			if currentSection == "routing" && ipInfo.Routing != nil {
+				ipInfo.Routing.ReferralURL = value
+			}
+			currentSection = "" // Reset after routing contact
+		// Default case for any additional fields
+		default:
+			// Handle any additional fields if necessary
+		}
+	}
+
+	// Validate mandatory fields
+	if !hasNetRange {
+		err = errors.New("NetRange is missing")
+		return
+	}
+	if !hasCIDR {
+		err = errors.New("CIDR is missing")
+		return
+	}
+
+	// Trim any trailing newlines or spaces
+	for _, network := range ipInfo.Networks {
+		network.Comment = strings.TrimSpace(network.Comment)
+		if network.Organization != nil {
+			network.Organization.Street = strings.TrimSpace(network.Organization.Street)
+			network.Organization.Comment = strings.TrimSpace(network.Organization.Comment)
+		}
+		if network.Customer != nil {
+			network.Customer.Street = strings.TrimSpace(network.Customer.Street)
+			network.Customer.Comment = strings.TrimSpace(network.Customer.Comment)
+		}
+	}
+
+	whoisInfo.IP = ipInfo
+	return
+}
+
+// parseASWhois parses AS WHOIS information.
+func ParseASWhois(text string) (whoisInfo WhoisInfo, err error) {
+	asInfo := &ASInfo{}
+	whoisLines := strings.Split(text, "\n")
+	currentSection := ""
+
+	// Flags to check mandatory fields
+	hasASNumber := false
+	hasASHandle := false
+
+	for _, line := range whoisLines {
+		line = strings.TrimSpace(line)
+		// Skip empty lines and comments
+		if len(line) < 5 || strings.HasPrefix(line, "#") || !strings.Contains(line, ":") {
+			continue
+		}
+
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+
+		switch strings.ToLower(key) {
+		// AS Basic Information
+		case "asnumber", "as-number", "as number", "aut-num":
+			asInfo.Number = strings.TrimPrefix(value, "AS")
+			hasASNumber = true
+		case "asname", "as-name", "as name":
+			asInfo.Name = value
+		case "ashandle", "as-handle", "as handle":
+			asInfo.Handle = value
+			hasASHandle = true
+		case "regdate", "registration-date", "created":
+			if currentSection == "organization" && asInfo.Organization != nil {
+				asInfo.Organization.RegistrationDate = value
+			} else {
+				asInfo.RegDate = value
+			}
+		case "updated", "last-modified":
+			if currentSection == "organization" && asInfo.Organization != nil {
+				asInfo.Organization.Updated = value
+			} else {
+				asInfo.Updated = value
+			}
+		case "ref", "reference":
+			if currentSection == "organization" && asInfo.Organization != nil {
+				asInfo.Organization.ReferralURL = value
+			} else {
+				asInfo.Ref = value
+			}
+
+		// Organization Information
+		case "orgname", "org-name", "organization", "owner":
+			asInfo.Organization = &Contact{
+				Organization: value,
+			}
+			currentSection = "organization"
+		case "orgid", "org-id":
+			if asInfo.Organization != nil {
+				asInfo.Organization.ID = value
+			}
+		case "address":
+			if asInfo.Organization != nil && currentSection == "organization" {
+				asInfo.Organization.Street += value + "\n"
+			}
+		case "city":
+			if asInfo.Organization != nil && currentSection == "organization" {
+				asInfo.Organization.City = value
+			}
+		case "stateprov", "state":
+			if asInfo.Organization != nil && currentSection == "organization" {
+				asInfo.Organization.Province = value
+			}
+		case "postalcode", "postal-code":
+			if asInfo.Organization != nil && currentSection == "organization" {
+				asInfo.Organization.PostalCode = value
+			}
+		case "country":
+			if asInfo.Organization != nil && currentSection == "organization" {
+				asInfo.Organization.Country = value
+			}
+
+		// Abuse Contact Information
+		case "orgabusehandle", "org-abuse-handle":
+			asInfo.Abuse = &Contact{
+				ID: value,
+			}
+			currentSection = "abuse"
+		case "orgabusename", "org-abuse-name":
+			if asInfo.Abuse != nil {
+				asInfo.Abuse.Name = value
+			}
+		case "orgabusephone", "org-abuse-phone":
+			if asInfo.Abuse != nil {
+				asInfo.Abuse.Phone = value
+			}
+		case "orgabuseemail", "org-abuse-email":
+			if asInfo.Abuse != nil {
+				asInfo.Abuse.Email = value
+			}
+		case "orgabuseref", "org-abuse-ref":
+			if asInfo.Abuse != nil {
+				asInfo.Abuse.ReferralURL = value
+			}
+
+		// Routing Contact Information
+		case "orgroutinghandle", "org-routing-handle":
+			asInfo.Routing = &Contact{
+				ID: value,
+			}
+			currentSection = "routing"
+		case "orgroutingname", "org-routing-name":
+			if asInfo.Routing != nil {
+				asInfo.Routing.Name = value
+			}
+		case "orgroutingphone", "org-routing-phone":
+			if asInfo.Routing != nil {
+				asInfo.Routing.Phone = value
+			}
+		case "orgroutingemail", "org-routing-email":
+			if asInfo.Routing != nil {
+				asInfo.Routing.Email = value
+			}
+		case "orgroutingref", "org-routing-ref":
+			if asInfo.Routing != nil {
+				asInfo.Routing.ReferralURL = value
+			}
+
+		// Technical Contact Information
+		case "orgtechhandle", "org-tech-handle":
+			asInfo.Technical = &Contact{
+				ID: value,
+			}
+			currentSection = "technical"
+		case "orgtechname", "org-tech-name":
+			if asInfo.Technical != nil {
+				asInfo.Technical.Name = value
+			}
+		case "orgtechphone", "org-tech-phone":
+			if asInfo.Technical != nil {
+				asInfo.Technical.Phone = value
+			}
+		case "orgtechemail", "org-tech-email":
+			if asInfo.Technical != nil {
+				asInfo.Technical.Email = value
+			}
+		case "orgtechref", "org-tech-ref":
+			if asInfo.Technical != nil {
+				asInfo.Technical.ReferralURL = value
+			}
+
+		// Comments
+		case "comment":
+			if asInfo.Organization != nil && currentSection == "organization" {
+				asInfo.Organization.Comment += value + "\n"
+			}
+		}
+	}
+
+	// Validate mandatory fields
+	if !hasASNumber {
+		err = errors.New("ASNumber is missing")
+		return
+	}
+	if !hasASHandle {
+		err = errors.New("ASHandle is missing")
+		return
+	}
+
+	// Trim any trailing newlines or spaces
+	if asInfo.Organization != nil {
+		asInfo.Organization.Street = strings.TrimSpace(asInfo.Organization.Street)
+		asInfo.Organization.Comment = strings.TrimSpace(asInfo.Organization.Comment)
+	}
+	if asInfo.Routing != nil {
+		asInfo.Routing.Street = strings.TrimSpace(asInfo.Routing.Street)
+	}
+	if asInfo.Technical != nil {
+		asInfo.Technical.Street = strings.TrimSpace(asInfo.Technical.Street)
+	}
+	if asInfo.Abuse != nil {
+		asInfo.Abuse.Street = strings.TrimSpace(asInfo.Abuse.Street)
+	}
+
+	whoisInfo.AS = asInfo
+	return
+}
+
+// isIPWhois checks if the WHOIS text is for an IP address
+func isIPWhois(text string) bool {
+	// Check for typical IP WHOIS keywords
+	ipKeywords := []string{"NetRange:", "CIDR:", "inetnum:", "inet6num:"}
+
+	for _, keyword := range ipKeywords {
+		if strings.Contains(text, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+// isASWhois checks if the WHOIS text is for an AS number
+func isASWhois(text string) bool {
+	return strings.Contains(text, "ASNumber:") || strings.Contains(text, "ASName:") || strings.Contains(text, "aut-num:")
 }
 
 // parseContact do parse contact info
