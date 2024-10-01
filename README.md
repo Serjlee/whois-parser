@@ -6,11 +6,11 @@
 [![Build Status](https://github.com/likexian/whois-parser/actions/workflows/gotest.yaml/badge.svg)](https://github.com/likexian/whois-parser/actions/workflows/gotest.yaml)
 [![Code Cover](https://release.likexian.com/whois-parser/coverage.svg)](https://github.com/likexian/whois-parser/actions/workflows/gotest.yaml)
 
-WhoisParser is a simple Go module for domain whois information parsing.
+WhoisParser is a simple Go module for domain, IP, and AS whois information parsing.
 
 ## Overview
 
-This module parses the provided domain whois information and returns a readable data struct.
+This module parses the provided domain, IP, or AS whois information and returns a readable data struct.
 
 ## Verified Extensions
 
@@ -25,43 +25,156 @@ For binary distributions of whois information query and parsing, please download
 ## Installation
 
 ```shell
-go get github.com/likexian/whois-parser
+go get github.com/0xDezzy/whois-parser
 ```
 
 ## Importing
 
 ```go
 import (
-    "github.com/likexian/whois-parser"
+    "github.com/0xDezzy/whois-parser"
 )
 ```
 
 ## Documentation
 
-Visit the docs on [GoDoc](https://pkg.go.dev/github.com/likexian/whois-parser)
+Visit the docs on [GoDoc](https://pkg.go.dev/github.com/0xDezzy/whois-parser)
 
-## Example
+## Examples
 
+### Domain WHOIS
 ```go
-result, err := whoisparser.Parse(whois_raw)
-if err == nil {
-    // Print the domain status
-    fmt.Println(result.Domain.Status)
+package main
 
-    // Print the domain created date
-    fmt.Println(result.Domain.CreatedDate)
+import (
+    "fmt"
+    "github.com/likexian/whois"
+    "github.com/0xDezzy/whois-parser"
+)
 
-    // Print the domain expiration date
-    fmt.Println(result.Domain.ExpirationDate)
+func main() {
+    domain := "example.com"
+    whoisRaw, err := whois.Whois(domain)
+    if err != nil {
+        fmt.Println(err)
+        return
+    }
 
-    // Print the registrar name
-    fmt.Println(result.Registrar.Name)
+    result, err := whoisparser.Parse(whoisRaw)
+    if err == nil && result.Domain != nil {
+        // Print the domain status
+        fmt.Println("Domain Status:", result.Domain.Status)
 
-    // Print the registrant name
-    fmt.Println(result.Registrant.Name)
+        // Print the domain created date
+        fmt.Println("Created Date:", result.Domain.CreatedDate)
 
-    // Print the registrant email address
-    fmt.Println(result.Registrant.Email)
+        // Print the domain expiration date
+        fmt.Println("Expiration Date:", result.Domain.ExpirationDate)
+
+        // Print the registrar name
+        if result.Registrar != nil {
+            fmt.Println("Registrar Name:", result.Registrar.Name)
+        }
+
+        // Print the registrant name
+        if result.Registrant != nil {
+            fmt.Println("Registrant Name:", result.Registrant.Name)
+        }
+
+        // Print the registrant email address
+        if result.Registrant != nil {
+            fmt.Println("Registrant Email:", result.Registrant.Email)
+        }
+    } else {
+        fmt.Println(err)
+    }
+}
+```
+
+### IP WHOIS
+```go
+package main
+
+import (
+    "fmt"
+    "github.com/likexian/whois"
+    "github.com/0xDezzy/whois-parser"
+)
+
+func main() {
+    ip := "8.8.8.8"
+    whoisRaw, err := whois.Whois(ip)
+    if err != nil {
+        fmt.Println(err)
+        return
+    }
+
+    result, err := whoisparser.Parse(whoisRaw)
+    if err == nil && result.IP != nil && len(result.IP.Networks) > 0 {
+        network := result.IP.Networks[0]
+
+        // Print the IP range
+        fmt.Println("IP Range:", network.Range)
+
+        // Print the CIDR blocks
+        fmt.Println("CIDR Blocks:", network.CIDR)
+
+        // Print the network name
+        fmt.Println("Network Name:", network.Name)
+
+        // Print the organization name
+        if network.Organization != nil {
+            fmt.Println("Organization:", network.Organization.Organization)
+        }
+
+        // Print the abuse contact email
+        if result.IP.Abuse != nil {
+            fmt.Println("Abuse Contact Email:", result.IP.Abuse.Email)
+        }
+    } else {
+        fmt.Println(err)
+    }
+}
+```
+
+### AS WHOIS
+```go
+package main
+
+import (
+    "fmt"
+    "github.com/likexian/whois"
+    "github.com/0xDezzy/whois-parser"
+)
+
+func main() {
+    asNumber := "AS15169" // Google's AS number
+    whoisRaw, err := whois.Whois(asNumber)
+    if err != nil {
+        fmt.Println(err)
+        return
+    }
+
+    result, err := whoisparser.Parse(whoisRaw)
+    if err == nil && result.AS != nil {
+        // Print the AS number
+        fmt.Println("AS Number:", result.AS.Number)
+
+        // Print the AS name
+        fmt.Println("AS Name:", result.AS.Name)
+
+        // Print the organization name
+        if result.AS.Organization != nil {
+            fmt.Println("Organization:", result.AS.Organization.Organization)
+        }
+
+        // Print the technical contact email
+        if result.AS.Technical != nil {
+            fmt.Println("Technical Contact Email:", result.AS.Technical.Email)
+        }
+    } else {
+        fmt.Println(err)
+    }
 }
 ```
 
