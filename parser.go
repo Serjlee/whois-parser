@@ -227,8 +227,7 @@ func ParseIPWhois(text string) (whoisInfo WhoisInfo, err error) {
 	var currentNetwork *Network
 	currentSection := ""
 
-	// Flags to check mandatory fields
-	hasCIDR := false
+	fallbackNetworkInfo := &Network{}
 
 	for _, line := range whoisLines {
 		line = strings.TrimSpace(line)
@@ -253,6 +252,8 @@ func ParseIPWhois(text string) (whoisInfo WhoisInfo, err error) {
 			currentNetwork.Range = value
 			ipInfo.Networks = append(ipInfo.Networks, currentNetwork)
 			currentSection = "network"
+		case "inetnum":
+			fallbackNetworkInfo.Range = value
 		case "cidr":
 			if currentNetwork != nil {
 				cidrs := strings.Split(value, ",")
@@ -260,7 +261,6 @@ func ParseIPWhois(text string) (whoisInfo WhoisInfo, err error) {
 					cidr = strings.TrimSpace(cidr)
 					if cidr != "" {
 						currentNetwork.CIDR = append(currentNetwork.CIDR, cidr)
-						hasCIDR = true
 					}
 				}
 			}
@@ -294,12 +294,17 @@ func ParseIPWhois(text string) (whoisInfo WhoisInfo, err error) {
 			if currentNetwork != nil {
 				currentNetwork.OrganizationName = value
 				// Do not set currentSection here
+			} else {
+				fallbackNetworkInfo.OrganizationName = value
 			}
 		// Organization section starts here
 		case "orgname":
 			if currentNetwork != nil {
 				if currentNetwork.Organization == nil {
 					currentNetwork.Organization = &Contact{}
+				} else {
+					fallbackNetworkInfo.Organization = &Contact{}
+					fallbackNetworkInfo.Organization.Name = value
 				}
 				currentNetwork.Organization.Organization = value
 				currentSection = "organization"
@@ -434,6 +439,8 @@ func ParseIPWhois(text string) (whoisInfo WhoisInfo, err error) {
 						currentNetwork.Customer.Country = value
 					}
 				}
+			} else {
+				fallbackNetworkInfo.OrganizationName = value
 			}
 		case "comment":
 			if currentNetwork != nil {
@@ -526,14 +533,8 @@ func ParseIPWhois(text string) (whoisInfo WhoisInfo, err error) {
 		}
 	}
 
-	// Validate mandatory fields
-	// if !hasNetRange {
-	// 	err = errors.New("NetRange is missing")
-	// 	return
-	// }
-	if !hasCIDR {
-		err = errors.New("CIDR is missing")
-		return
+	if len(ipInfo.Networks) == 0 && fallbackNetworkInfo.Range != "" {
+		ipInfo.Networks = append(ipInfo.Networks, fallbackNetworkInfo)
 	}
 
 	// Trim any trailing newlines or spaces
