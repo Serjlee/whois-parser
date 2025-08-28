@@ -228,7 +228,6 @@ func ParseIPWhois(text string) (whoisInfo WhoisInfo, err error) {
 	currentSection := ""
 
 	// Flags to check mandatory fields
-	hasNetRange := false
 	hasCIDR := false
 
 	for _, line := range whoisLines {
@@ -253,7 +252,6 @@ func ParseIPWhois(text string) (whoisInfo WhoisInfo, err error) {
 			currentNetwork = &Network{}
 			currentNetwork.Range = value
 			ipInfo.Networks = append(ipInfo.Networks, currentNetwork)
-			hasNetRange = true
 			currentSection = "network"
 		case "cidr":
 			if currentNetwork != nil {
@@ -529,10 +527,10 @@ func ParseIPWhois(text string) (whoisInfo WhoisInfo, err error) {
 	}
 
 	// Validate mandatory fields
-	if !hasNetRange {
-		err = errors.New("NetRange is missing")
-		return
-	}
+	// if !hasNetRange {
+	// 	err = errors.New("NetRange is missing")
+	// 	return
+	// }
 	if !hasCIDR {
 		err = errors.New("CIDR is missing")
 		return
